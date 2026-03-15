@@ -1,0 +1,135 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="PZSaveManager.MainWindow"
+        Width="1000"
+        Height="700"
+        Title="Project Zomboid Save Manager">
+
+<Grid Margin="20"
+      ColumnDefinitions="*,*"
+      RowDefinitions="Auto,Auto,*,Auto,Auto,*,Auto"
+      ColumnSpacing="20"
+      RowSpacing="10">
+
+    <!-- TITLE -->
+    <TextBlock Grid.Row="0"
+               Grid.ColumnSpan="2"
+               Text="Project Zomboid Save Manager"
+               FontSize="22"
+               FontWeight="Bold"
+               HorizontalAlignment="Center"/>
+
+    <!-- HEADERS -->
+    <TextBlock Grid.Row="1" Grid.Column="0" Text="Worlds"/>
+    <TextBlock Grid.Row="1" Grid.Column="1" Text="Backup Files"/>
+
+    <!-- WORLD LIST -->
+    <ListBox Name="WorldList"
+             Grid.Row="2"
+             Grid.Column="0"
+             Height="220"/>
+
+    <!-- BACKUP AREA -->
+    <StackPanel Grid.Row="2"
+                Grid.Column="1"
+                Spacing="5">
+
+        <!-- SEARCH -->
+        <TextBox Name="BackupSearchBox"
+                 Watermark="Search backup..."
+                 Width="250"/>
+
+        <!-- BACKUP LIST -->
+        <ListBox Name="BackupList"
+                 Height="200"/>
+
+    </StackPanel>
+
+    <!-- ACTION ROW -->
+    <StackPanel Grid.Row="3"
+                Grid.Column="0"
+                Orientation="Horizontal"
+                Spacing="10">
+
+        <Button Name="ReloadButton"
+                Content="Reload"
+                Width="90"/>
+
+        <TextBlock Text="Backup name:"
+                   VerticalAlignment="Center"/>
+
+        <TextBox Name="BackupNameBox"
+                 Width="220"
+                 Watermark="Enter backup name"/>
+
+        <Button Name="BackupButton"
+                Content="Backup"
+                Width="90"/>
+
+    </StackPanel>
+
+    <!-- BACKUP ACTIONS -->
+    <StackPanel Grid.Row="3"
+                Grid.Column="1"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="10">
+
+        <Button Name="RenameButton"
+                Content="Rename"
+                Width="90"/>
+
+        <Button Name="DeleteButton"
+                Content="Delete"
+                Width="90"/>
+
+        <Button Name="OpenFolderButton"
+                Content="Open Folder"
+                Width="110"/>
+
+        <Button Name="RestoreButton"
+                Content="Restore"
+                Width="90"/>
+
+    </StackPanel>
+
+    <!-- LOG HEADER -->
+    <TextBlock Grid.Row="4"
+               Grid.Column="0"
+               Text="Logs"/>
+
+    <!-- METADATA HEADER -->
+    <TextBlock Grid.Row="4"
+               Grid.Column="1"
+               Text="Metadata"/>
+
+    <!-- LOG PANEL -->
+    <ListBox Name="LogList"
+             Grid.Row="5"
+             Grid.Column="0"
+             Height="200"/>
+
+    <!-- METADATA PANEL -->
+    <ScrollViewer Grid.Row="5"
+                  Grid.Column="1"
+                  Height="160"
+                  VerticalScrollBarVisibility="Auto">
+
+        <TextBox Name="MetadataBox"
+                 IsReadOnly="True"
+                 AcceptsReturn="True"
+                 TextWrapping="Wrap"/>
+
+    </ScrollViewer>
+
+    <!-- PROGRESS BAR -->
+    <ProgressBar Name="ArchiveProgressBar"
+                 Grid.Row="6"
+                 Grid.Column="0"
+                 Grid.ColumnSpan="2"
+                 Height="18"
+                 Minimum="0"
+                 Maximum="100"/>
+
+</Grid>
+</Window>

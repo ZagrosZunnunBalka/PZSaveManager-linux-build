@@ -1,0 +1,424 @@
+﻿using System.Drawing;
+using SharpCompress.Archives;
+using SharpCompress.Common;
+using PZSaveManager.Properties;
+using SharpCompress.Archives.Zip;
+using System.Xml.Linq;
+using PZSaveManager.Classes.Exceptions;
+using SharpCompress.Archives.Tar;
+using System.Collections.Concurrent;
+using System.Buffers;
+using System.Diagnostics;
+
+namespace PZSaveManager.Classes
+{
+	public class Save
+	{
+		public static class DiskInfo
+		{
+			// All units are in bytes
+			public static long AvailableDiskSpace => new DriveInfo(BackupPath).AvailableFreeSpace;
+			public static long TotalOccupiedSaveSize
+				=> new DirectoryInfo(BackupPath).EnumerateFiles("*", SearchOption.AllDirectories).Sum(file => file.Length);
+
+			public static long GetOccupiedSaveSize(World world)
+				=> world.GetSaves().Sum(s => s.ArchivePath is not null && File.Exists(s.ArchivePath) ? new FileInfo(s.ArchivePath).Length : 0);
+		}
+
+		public const string ArchiveFileName	 = "Save";
+		public const string MetadataFileName = "Metadata.xml";
+		public const string ThumbFileName	 = "Thumb.png";
+
+		public const string ManualSaveDescription	= "Manual save";
+		public const string ExternalSaveDescription = "External save";
+		public const string AutosaveDescription		= "Auto-save";
+		public const string UnnamedSaveDescription	= "Unnamed save";
+
+		public static string DefaultBackupPath => Path.Combine(World.BaseDirectory, "Backups");
+		public static string BackupPath => Settings.Default.SavePath.Length > 0 ? Settings.Default.SavePath : DefaultBackupPath;
+
+		public World? AssociatedWorld { get; }
+		public string? ArchivePath { get; }
+		public string Description { get; }
+		public DateTime Date { get; }
+		public MemoryStream Thumb { get; }
+
+		public static bool IsSaveInProgress { get; private set; } = false;
+		public static bool IsSaveCancelable { get; private set; } = true;
+
+		private const int ProgressReportThreshold = 50;  // Report progress every 50 files
+
+		private const int FileBufferSize	= 16 * 1024;  // Larger values don't squeeze out any noticeable performance boost
+        private const int ArchiveBufferSize = 128 * 1024;  // 128 KB
+
+        private static readonly object saveLock = new();
+
+		private static readonly string[] FilesToDelete = { "Save.tar", "Save.zip", "Metadata.xml", "Thumb.png" };
+
+		public Save(World? associatedWorld, string description, string? archivePath, DateTime date, MemoryStream thumb)
+		{
+			AssociatedWorld = associatedWorld;
+			Description = description;
+			ArchivePath = archivePath;
+			Date = date;
+			Thumb = thumb;
+		}
+
+		public Save(World associatedWorld, string description)
+			: this(associatedWorld, description, null, DateTime.Now, new()) { }
+
+		public async Task RestoreAsync()
+		{
+			await Task.Run(() =>
+			{
+				if (AssociatedWorld is null)
+					throw new InvalidOperationException($"{nameof(AssociatedWorld)} is null.");
+
+				if (AssociatedWorld.IsActive)
+					throw new WorldActiveException("The current world must not be active before proceeding.");
+
+				if (ArchivePath is null)
+					throw new ArchivePathNullException("The specified archive path is null.");
+
+				if (!ZipArchive.IsZipFile(ArchivePath) && !TarArchive.IsTarFile(ArchivePath))
+					throw new InvalidSaveArchiveException("The specified file is not a real zip or TAR archive.");
+
+				Logger.Log($"Beginning to restore {ArchivePath}...", LogSeverity.Info);
+				var stopwatch = Stopwatch.StartNew();
+
+				try
+				{
+					using var stream = new FileStream(ArchivePath, FileMode.Open, FileAccess.Read, FileShare.Read, ArchiveBufferSize, FileOptions.SequentialScan);
+					using var archive = ArchiveFactory.Open(stream);
+
+					var entryArray = archive.Entries.ToArray();  // Evil exception dynamite warehouse
+					int totalFiles = entryArray.Length;
+
+					var entryStreams = new List<(string RelativePath, MemoryStream Stream)>(totalFiles);
+					UpdateArchiveStatus(ArchiveStatus.Extracting, "Extracting entries to memory...");
+
+					for (int i = 0; i < totalFiles; i++)
+					{
+						// Specifying the capacity doesn't show any noticeable performance boost. Don't risk overflow.
+						var ms = new MemoryStream(/* (int)entryArray[i].Size */);
+
+						entryArray[i].WriteTo(ms);  // Not thread-safe. Doing Parallel.For with a lock doesn't speed it up.
+						ms.Position = 0;
+
+                        entryStreams.Add((entryArray[i].Key!, ms));
+
+						if (i % ProgressReportThreshold == 0)
+						{
+							if (AssociatedWorld.IsActive)
+								throw new WorldActiveException("The current world must not be active before proceeding.");
+
+							ArchiveProgressChanged?.Invoke(this, new(i, totalFiles));
+						}
+					}
+
+					UpdateArchiveStatus(ArchiveStatus.SavingToDisk, "Saving entries to disk...");
+					int filesProcessed = 0;
+
+					Parallel.ForEach(entryStreams, entry =>
+					{
+						string outputPath = Path.Combine(World.WorldDirectory, entry.RelativePath);
+						Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+
+                        using (entry.Stream)
+						{
+							using var fs = File.Create(outputPath, FileBufferSize, FileOptions.SequentialScan);
+							entry.Stream.CopyTo(fs);
+						}
+
+						// Accuracy is a small price to pay
+						// int filesProcessedNew = Interlocked.Increment(ref filesProcessed);
+
+						if (++filesProcessed % ProgressReportThreshold == 0)
+						{
+							if (AssociatedWorld.IsActive)
+								throw new WorldActiveException("The current world must not be active before proceeding.");
+
+							ArchiveProgressChanged?.Invoke(this, new(filesProcessed, totalFiles));
+						}
+					});
+				}
+				catch (Exception ex)
+				{
+					// SaveExtractionException implies that the save might be corrupted
+					throw new SaveExtractionException("Could not extract the specified save to the world directory.", ex);
+				}
+
+				Logger.Log($"Successfully restored {ArchivePath}", stopwatch);
+
+				// Replace the old thumb
+				if (Thumb is null || Thumb.Length == 0)
+					return;
+
+				try
+				{
+					using var ts = File.Create(Path.Combine(AssociatedWorld.Path, World.ThumbName));
+
+					Thumb.Position = 0;
+					Thumb.CopyTo(ts);
+
+					ts.Position = 0;
+				}
+				catch (Exception ex)
+				{
+					Logger.Log("The old thumb couldn't be replaced", ex);
+				}
+			});
+		}
+
+		public async Task ExportAsync(CancellationToken token)
+		{
+			lock (saveLock)
+			{
+				if (AssociatedWorld is null)
+					throw new InvalidOperationException($"{nameof(AssociatedWorld)} is null.");
+
+				if (IsSaveInProgress)
+					throw new InvalidOperationException("Another save is already in progress. Please wait until it is completed.");
+
+				if (!Directory.EnumerateFiles(AssociatedWorld.Path, "*", SearchOption.TopDirectoryOnly).Any())
+					throw new NotSupportedException("Cannot export an empty world.");
+
+				SetSaveState(true, true);
+			}
+
+			string saveName = $"{AssociatedWorld.Name} {DateTime.Now:yyyy-MM-dd HH-mm-ss fffff}";  // ISO 8601 gang stay winning
+			string saveDir = Path.Combine(BackupPath, saveName);
+
+			try
+			{
+				await Task.Run(() =>
+				{
+					Directory.CreateDirectory(BackupPath);
+					Directory.CreateDirectory(saveDir);
+
+					Logger.Log($"Beginning to export {AssociatedWorld.Name}... (compression {(Settings.Default.UseCompression ? "enabled" : "disabled")})", LogSeverity.Info);
+					var stopwatch = Stopwatch.StartNew();
+
+					string outputArchivePath = Path.Combine(saveDir, ArchiveFileName + (Settings.Default.UseCompression ? ".zip" : ".tar"));
+					string outputXmlPath	 = Path.Combine(saveDir, MetadataFileName);
+					string outputThumbPath	 = Path.Combine(saveDir, ThumbFileName);
+
+					string[] files = Directory.GetFiles(AssociatedWorld.Path, "*", SearchOption.AllDirectories);
+					int totalFiles = files.Length, processedFiles = 0;
+
+					using IWritableArchive archive = Settings.Default.UseCompression ? ZipArchive.Create() : TarArchive.Create();
+
+					var bag = new ConcurrentBag<(string EntryPath, MemoryStream Stream, DateTime EntryDate)>();
+
+					UpdateArchiveStatus(ArchiveStatus.AddingFromDisk, "Adding files from disk...");
+					var thumb = GetSaveThumb();
+
+					Parallel.For(0, totalFiles, new() { CancellationToken = token }, i =>
+					{
+						var ms = new MemoryStream();
+
+						// Copy every file to the memory to avoid archive corruption. The game actively messes with them.
+						using (var fs = new FileStream(files[i], FileMode.Open, FileAccess.Read, FileShare.ReadWrite, FileBufferSize, FileOptions.SequentialScan))
+							fs.CopyTo(ms);
+
+						ms.Position = 0;
+
+						string relativePath = Path.GetRelativePath(AssociatedWorld.Path, files[i]);  // e.g. "folder/file.dat"
+						string entryPath = Path.Combine(AssociatedWorld.Gamemode, AssociatedWorld.Name, relativePath).Replace('\\', '/');  // e.g. Gamemode/WorldName/folder/file.dat
+
+						bag.Add((entryPath, ms, File.GetLastWriteTime(files[i])));
+
+						// int processedFilesNew = Interlocked.Increment(ref processedFiles);
+
+						if (++processedFiles % ProgressReportThreshold == 0)
+							ArchiveProgressChanged?.Invoke(this, new(processedFiles, totalFiles));
+					});
+
+					UpdateArchiveStatus(ArchiveStatus.AddingToArchive, "Adding files to archive...");
+					processedFiles = 0;
+
+					using (archive.PauseEntryRebuilding())
+					{
+						while (bag.TryTake(out var entry))
+						{
+							archive.AddEntry(entry.EntryPath, entry.Stream, true, entry.Stream.Length, entry.EntryDate);  // Not thread-safe
+
+							if (++processedFiles % ProgressReportThreshold == 0)
+							{
+                                token.ThrowIfCancellationRequested();
+                                ArchiveProgressChanged?.Invoke(this, new(processedFiles, totalFiles));
+							}
+						}
+					}
+
+					// Export the archive
+					SetSaveState(true, false);
+					UpdateArchiveStatus(ArchiveStatus.Exporting, "Save is now uncancellable. Exporting the archive...");
+
+					archive.SaveTo(outputArchivePath, new(Settings.Default.UseCompression ? CompressionType.Deflate : CompressionType.None));
+
+					// Save the metadata and thumb
+					CreateMetadata(AssociatedWorld.Name, AssociatedWorld.Gamemode, Description, Date).Save(outputXmlPath);
+
+                    if (thumb != null)
+                    {
+                        thumb.Save(outputThumbPath);
+                        thumb.Dispose();
+                    }
+
+					Logger.Log($"Successfully exported the world {AssociatedWorld.Name}", stopwatch);
+					SaveExported?.Invoke(null, EventArgs.Empty);
+
+
+                    Bitmap? GetSaveThumb()
+                    {
+                        // Thumbnail generation disabled for Linux compatibility
+                        return null;
+                    }
+				}, token);
+			}
+			catch
+			{
+				try
+				{
+					await new DirectoryInfo(saveDir).DeleteParallelAsync();
+				}
+				catch (Exception ex)
+				{
+					Logger.Log("The save directory could not be deleted", ex);
+				}
+
+				SetSaveState(false, true);
+				throw;
+			}
+			finally
+			{
+				SetSaveState(false, true);
+			}
+
+			void SetSaveState(bool isInProgress, bool isCancelable)
+			{
+				IsSaveInProgress = isInProgress;
+				IsSaveCancelable = isCancelable;
+			}
+		}
+
+		public async Task RenameAsync(string newDescription)
+		{
+			if (AssociatedWorld is null)
+				throw new InvalidOperationException($"{nameof(AssociatedWorld)} is null.");
+
+			if (ArchivePath is null)
+				throw new InvalidOperationException($"{nameof(ArchivePath)} is null.");
+
+			await Task.Run(() =>
+			{
+				string metadataPath = Path.Combine(Directory.GetParent(ArchivePath)!.FullName, MetadataFileName);
+
+				if (File.Exists(metadataPath))
+				{
+					var doc = XElement.Load(metadataPath);
+
+					doc.SetElementValue(XmlElementName.Metadata.Description, newDescription);
+					doc.Save(metadataPath);
+				}
+				else
+				{
+					CreateMetadata(AssociatedWorld.Name, AssociatedWorld.Gamemode, newDescription, Date).Save(metadataPath);
+				}
+			});
+		}
+
+		public static (string Gamemode, string Name)? GetWorldDataFromArchive(string archivePath)
+		{
+			if (!File.Exists(archivePath))
+				return null;
+
+			try
+			{
+				using var archive = ArchiveFactory.Open(archivePath);
+				string? firstEntryPath = archive.Entries.FirstOrDefault()?.Key;
+
+				if (string.IsNullOrWhiteSpace(firstEntryPath) || !firstEntryPath.Contains('/'))
+					return null;
+
+				// e.g. Gamemode/WorldName/map_sand.bin
+				var parts = firstEntryPath.Split('/');
+
+				return parts.Length >= 2 ? (parts[0], parts[1]) : null;
+			}
+			catch (Exception ex)
+			{
+				Logger.Log($"Could not retrieve world information from {archivePath}", ex);
+				return null;
+			}
+		}
+
+		public async Task DeleteAsync()
+		{
+			await Task.Run(() =>
+			{
+				if (string.IsNullOrWhiteSpace(ArchivePath))
+					throw new InvalidOperationException($"{nameof(ArchivePath)} is null.");
+
+				string? parentFolderPath = Directory.GetParent(ArchivePath)!.FullName;
+
+				if (!Directory.Exists(parentFolderPath))
+					return;
+
+				Logger.Log($"Deleting the save {parentFolderPath}...", LogSeverity.Info);
+
+				foreach (string filename in FilesToDelete)
+				{
+					string filePath = Path.Combine(parentFolderPath, filename);
+
+					if (File.Exists(filePath))
+					{
+						try
+						{
+							File.Delete(filePath);
+						}
+						catch (Exception ex)
+						{
+							Logger.Log($"Couldn't delete the file {filePath}", ex);
+						}
+					}
+				}
+
+				try
+				{
+					Directory.Delete(parentFolderPath);
+				}
+				catch (Exception ex)
+				{
+					Logger.Log($"Couldn't delete the save directory {parentFolderPath}", ex);
+				}
+			});
+		}
+
+		private void UpdateArchiveStatus(ArchiveStatus status, string logMessage)
+		{
+			Logger.Log(logMessage, LogSeverity.Info);
+			ArchiveStatusChanged?.Invoke(this, new(status));
+		}
+
+		private static XDocument CreateMetadata(string worldName, string worldGamemode, string description, DateTime date)
+		{
+			return new XDocument(
+				new XComment($" Generated by Project Zomboid Save Manager {VersionManager.ApplicationVersionText} "),
+				new XElement(XmlElementName.Metadata.SaveMetadata,
+					new XAttribute(XmlElementName.Metadata.Version, VersionManager.XmlMetadataVersionText),
+					new XElement(XmlElementName.Metadata.WorldName, worldName),
+					new XElement(XmlElementName.Metadata.WorldGamemode, worldGamemode),
+					new XElement(XmlElementName.Metadata.Description, description),
+					new XElement(XmlElementName.Metadata.Date, date.ToString("O"))
+				)
+			);
+		}
+
+		public event EventHandler<ArchiveProgressEventArgs>? ArchiveProgressChanged;
+		public event EventHandler<ArchiveStatusChangedEventArgs>? ArchiveStatusChanged;
+
+		public static event EventHandler<EventArgs>? SaveExported;
+	}
+}

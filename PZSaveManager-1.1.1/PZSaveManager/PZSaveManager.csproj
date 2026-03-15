@@ -1,0 +1,71 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <SystemDrawingEnableUnixSupport>true</SystemDrawingEnableUnixSupport>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Title>Project Zomboid Save Manager</Title>
+    <Product>Project Zomboid Save Manager</Product>
+    <AssemblyTitle>Project Zomboid Save Manager</AssemblyTitle>
+    <Company>Wirmaple73</Company>
+    <AssemblyVersion>1.1.0</AssemblyVersion>
+    <FileVersion>1.1.0</FileVersion>
+    <AssemblyName>PZSaveManager</AssemblyName>
+    <Authors>Wirmaple73</Authors>
+    <Description>Project Zomboid Save Manager</Description>
+    <Version>1.1.0</Version>
+
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Remove="Resources/Audio/AlreadySaving.wav" />
+    <None Remove="Resources/Audio/SaveCanceled.wav" />
+    <None Remove="Resources/Audio/SaveComplete.wav" />
+    <None Remove="Resources/Audio/SaveFailure.wav" />
+    <None Remove="Resources/Audio/SaveNotCanceled.wav" />
+    <None Remove="Resources/Audio/Saving.wav" />
+    <None Remove="Resources/Images/Delete.png" />
+    <None Remove="Resources/Images/New.png" />
+    <None Remove="Resources/Images/NoPreview.jpg" />
+    <None Remove="Resources/Images/RefreshList.png" />
+    <None Remove="Resources/Images/Rename.png" />
+    <None Remove="Resources/Images/Restore.png" />
+    <None Remove="Resources/NoPreview.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources/Audio/AlreadySaving.wav" />
+    <EmbeddedResource Include="Resources/Audio/SaveCanceled.wav" />
+    <EmbeddedResource Include="Resources/Audio/SaveComplete.wav" />
+    <EmbeddedResource Include="Resources/Audio/SaveFailure.wav" />
+    <EmbeddedResource Include="Resources/Audio/SaveNotCanceled.wav" />
+    <EmbeddedResource Include="Resources/Audio/Saving.wav" />
+    <EmbeddedResource Include="Resources/Images/Delete.png" />
+    <EmbeddedResource Include="Resources/Images/New.png" />
+    <EmbeddedResource Include="Resources/Images/NoPreview.jpg" />
+    <EmbeddedResource Include="Resources/Images/RefreshList.png" />
+    <EmbeddedResource Include="Resources/Images/Rename.png" />
+    <EmbeddedResource Include="Resources/Images/Restore.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../.editorconfig" Link=".editorconfig" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.12" />
+    <PackageReference Include="Avalonia.Controls.DataGrid" Version="11.3.12" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.12" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.12" />
+    <PackageReference Include="Avalonia.ReactiveUI" Version="11.3.9" />
+    <PackageReference Include="MessageBox.Avalonia" Version="3.3.1.1" />
+    <PackageReference Include="SharpCompress" Version="0.40.0" />
+    <PackageReference Include="System.Drawing.Common" Version="10.0.4" />
+    <PackageReference Include="System.Resources.Extensions" Version="8.0.0" />
+    <PackageReference Include="System.Configuration.ConfigurationManager" Version="8.0.0" />
+    <PackageReference Include="ManagedBass" Version="3.1.0" />
+  </ItemGroup>
+
+</Project>
